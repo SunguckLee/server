@@ -211,6 +211,9 @@ static char *safe_str(char *str)
 static const char *safe_str(const char *str)
 { return str ? str : ""; }
 
+static size_t safe_strlen(const char *str)
+{ return str ? strlen(str) : 0; }
+
 /* Classes */
 
 struct acl_host_and_ip
@@ -265,6 +268,7 @@ public:
   const char *ssl_cipher, *x509_issuer, *x509_subject;
   LEX_STRING plugin;
   LEX_STRING auth_string;
+  LEX_STRING default_rolename;
 
   ACL_USER *copy(MEM_ROOT *root)
   {
@@ -284,6 +288,8 @@ public:
       dst->plugin.str= strmake_root(root, plugin.str, plugin.length);
     dst->auth_string.str= safe_strdup_root(root, auth_string.str);
     dst->host.hostname= safe_strdup_root(root, host.hostname);
+    dst->default_rolename.str= safe_strdup_root(root, default_rolename.str);
+    dst->default_rolename.length= default_rolename.length;
     bzero(&dst->role_grants, sizeof(role_grants));
     return dst;
   }
@@ -637,9 +643,9 @@ bool ROLE_GRANT_PAIR::init(MEM_ROOT *mem, char *username,
   if (!this)
     return true;
 
-  size_t uname_l = username ? strlen(username) : 0;
-  size_t hname_l = hostname ? strlen(hostname) : 0;
-  size_t rname_l = rolename ? strlen(rolename) : 0;
+  size_t uname_l = safe_strlen(username);
+  size_t hname_l = safe_strlen(hostname);
+  size_t rname_l = safe_strlen(rolename);
   /*
     Create a buffer that holds all 3 NULL terminated strings in succession
     To save memory space, the same buffer is used as the hashkey
@@ -702,6 +708,7 @@ bool ROLE_GRANT_PAIR::init(MEM_ROOT *mem, char *username,
 #define NORMAL_HANDSHAKE_SIZE   6
 
 #define ROLE_ASSIGN_COLUMN_IDX  43
+#define DEFAULT_ROLE_COLUMN_IDX 44
 /* various flags valid for ACL_USER */
 #define IS_ROLE                 (1L << 0)
 /* Flag to mark that a ROLE is on the recursive DEPTH_FIRST_SEARCH stack */
@@ -1191,7 +1198,7 @@ static bool acl_load(THD *thd, TABLE_LIST *tables)
     update_hostname(&user.host, get_field(&acl_memroot, table->field[0]));
     char *username= get_field(&acl_memroot, table->field[1]);
     user.user.str= username;
-    user.user.length= username? strlen(username) : 0;
+    user.user.length= safe_strlen(username);
 
     /*
        If the user entry is a role, skip password and hostname checks
@@ -1216,7 +1223,7 @@ static bool acl_load(THD *thd, TABLE_LIST *tables)
     }
 
     char *password= get_field(&acl_memroot, table->field[2]);
-    uint password_len= password ? strlen(password) : 0;
+    uint password_len= safe_strlen(password);
     user.auth_string.str= safe_str(password);
     user.auth_string.length= password_len;
     set_user_salt(&user, password, password_len);
@@ -1264,8 +1271,7 @@ static bool acl_load(THD *thd, TABLE_LIST *tables)
         user.access|= TRIGGER_ACL;
 
       user.sort= get_sort(2, user.host.hostname, user.user.str);
-      user.hostname_length= (user.host.hostname ?
-                             (uint) strlen(user.host.hostname) : 0);
+      user.hostname_length= safe_strlen(user.host.hostname);
 
       /* Starting from 4.0.2 we have more fields */
       if (table->s->fields >= 31)
@@ -1346,6 +1352,14 @@ static bool acl_load(THD *thd, TABLE_LIST *tables)
 
       (void) my_init_dynamic_array(&user.role_grants,sizeof(ACL_ROLE *),
                                    8, 8, MYF(0));
+
+      /* check default role, if any */
+      if (!is_role && table->s->fields > DEFAULT_ROLE_COLUMN_IDX)
+      {
+        user.default_rolename.str=
+          get_field(&acl_memroot, table->field[DEFAULT_ROLE_COLUMN_IDX]);
+        user.default_rolename.length= safe_strlen(user.default_rolename.str);
+      }
 
       if (is_role)
       {
@@ -1867,7 +1881,8 @@ bool acl_getroot(Security_context *sctx, char *user, char *host,
   DBUG_RETURN(res);
 }
 
-int acl_check_setrole(THD *thd, char *rolename, ulonglong *access)
+int check_user_can_set_role(const char *host, const char *user,
+                            const char *rolename, ulonglong *access)
 {
   ACL_ROLE *role;
   ACL_USER_BASE *acl_user_base;
@@ -1882,8 +1897,7 @@ int acl_check_setrole(THD *thd, char *rolename, ulonglong *access)
   {
     /* have to clear the privileges */
     /* get the current user */
-    acl_user= find_user_exact(thd->security_ctx->priv_host,
-                              thd->security_ctx->priv_user);
+    acl_user= find_user_exact(host, user);
     if (acl_user == NULL)
     {
       my_error(ER_INVALID_CURRENT_USER, MYF(0), rolename);
@@ -1911,9 +1925,7 @@ int acl_check_setrole(THD *thd, char *rolename, ulonglong *access)
       continue;
 
     acl_user= (ACL_USER *)acl_user_base;
-    /* Yes! priv_user@host. Don't ask why - that's what check_access() does. */
-    if (acl_user->wild_eq(thd->security_ctx->priv_user,
-                          thd->security_ctx->host))
+    if (acl_user->wild_eq(user, host))
     {
       is_granted= TRUE;
       break;
@@ -1935,6 +1947,15 @@ int acl_check_setrole(THD *thd, char *rolename, ulonglong *access)
 end:
   mysql_mutex_unlock(&acl_cache->lock);
   return result;
+
+}
+
+int acl_check_setrole(THD *thd, char *rolename, ulonglong *access)
+{
+    /* Yes! priv_user@host. Don't ask why - that's what check_access() does. */
+  return check_user_can_set_role(thd->security_ctx->host,
+                                 thd->security_ctx->priv_user,
+                                 rolename, access);
 }
 
 
@@ -1959,7 +1980,6 @@ int acl_setrole(THD *thd, char *rolename, ulonglong access)
   }
   return 0;
 }
-
 
 static uchar* check_get_key(ACL_USER *buff, size_t *length,
                             my_bool not_used __attribute__((unused)))
@@ -2068,6 +2088,7 @@ static void acl_insert_user(const char *user, const char *host,
 
   mysql_mutex_assert_owner(&acl_cache->lock);
 
+  bzero(&acl_user, sizeof(acl_user));
   acl_user.user.str=*user ? strdup_root(&acl_memroot,user) : 0;
   acl_user.user.length= strlen(user);
   update_hostname(&acl_user.host, safe_strdup_root(&acl_memroot, host));
@@ -2518,7 +2539,60 @@ bool acl_check_host(const char *host, const char *ip)
   return 1;					// Host is not allowed
 }
 
+/**
+  Check if the user is allowed to alter the mysql.user table
 
+ @param thd              THD
+ @param host             Hostname for the user
+ @param user             User name
+
+ @return Error status
+   @retval 0 OK
+   @retval 1 Error
+*/
+
+int check_alter_user(THD *thd, const char *host, const char *user)
+{
+  int error = 1;
+  if (!initialized)
+  {
+    my_error(ER_OPTION_PREVENTS_STATEMENT, MYF(0), "--skip-grant-tables");
+    goto end;
+  }
+
+#ifdef WITH_WSREP
+  if ((!WSREP(thd) || !thd->wsrep_applier) &&
+      !thd->slave_thread && !thd->security_ctx->user[0])
+#else
+  if (!thd->slave_thread && !thd->security_ctx->user[0])
+#endif /* WITH_WSREP */
+  {
+    my_message(ER_PASSWORD_ANONYMOUS_USER, ER(ER_PASSWORD_ANONYMOUS_USER),
+               MYF(0));
+    goto end;
+  }
+  if (!host) // Role
+  {
+    my_error(ER_PASSWORD_NO_MATCH, MYF(0));
+    goto end;
+  }
+  if (!thd->slave_thread &&
+#ifdef WITH_WSREP
+      (!WSREP(thd) || !thd->wsrep_applier) &&
+#endif /* WITH_WSREP */
+      (strcmp(thd->security_ctx->priv_user, user) ||
+       my_strcasecmp(system_charset_info, host,
+                     thd->security_ctx->priv_host)))
+  {
+    if (check_access(thd, UPDATE_ACL, "mysql", NULL, NULL, 1, 0))
+      goto end;
+  }
+
+  error = 0;
+
+end:
+  return error;
+}
 /**
   Check if the user is allowed to change password
 
@@ -2538,47 +2612,17 @@ bool acl_check_host(const char *host, const char *ip)
 int check_change_password(THD *thd, const char *host, const char *user,
                            char *new_password, uint new_password_len)
 {
-  if (!initialized)
-  {
-    my_error(ER_OPTION_PREVENTS_STATEMENT, MYF(0), "--skip-grant-tables");
-    return(1);
-  }
-
-#ifdef WITH_WSREP
-  if ((!WSREP(thd) || !thd->wsrep_applier) &&
-      !thd->slave_thread && !thd->security_ctx->user[0])
-#else
-  if (!thd->slave_thread && !thd->security_ctx->user[0])
-#endif /* WITH_WSREP */
-  {
-    my_message(ER_PASSWORD_ANONYMOUS_USER, ER(ER_PASSWORD_ANONYMOUS_USER),
-               MYF(0));
-    return(1);
-  }
-  if (!host) // Role
-  {
-    my_error(ER_PASSWORD_NO_MATCH, MYF(0));
+  if (check_alter_user(thd, host, user))
     return 1;
-  }
-  if (!thd->slave_thread &&
-#ifdef WITH_WSREP
-      (!WSREP(thd) || !thd->wsrep_applier) &&
-#endif /* WITH_WSREP */
-      (strcmp(thd->security_ctx->priv_user, user) ||
-       my_strcasecmp(system_charset_info, host,
-                     thd->security_ctx->priv_host)))
-  {
-    if (check_access(thd, UPDATE_ACL, "mysql", NULL, NULL, 1, 0))
-      return(1);
-  }
+
   size_t len= strlen(new_password);
   if (len && len != SCRAMBLED_PASSWORD_CHAR_LENGTH &&
       len != SCRAMBLED_PASSWORD_CHAR_LENGTH_323)
   {
     my_error(ER_PASSWD_LENGTH, MYF(0), SCRAMBLED_PASSWORD_CHAR_LENGTH);
-    return -1;
+    return 1;
   }
-  return(0);
+  return 0;
 }
 
 
@@ -2707,6 +2751,133 @@ end:
 #endif /* WITH_WSREP */
 }
 
+int acl_check_set_default_role(THD *thd, const char *host, const char *user)
+{
+  return check_alter_user(thd, host, user);
+}
+
+int acl_set_default_role(THD *thd, const char *host, const char *user,
+                         const char *rolename)
+{
+  TABLE_LIST tables[TABLES_MAX];
+  TABLE *table;
+  char user_key[MAX_KEY_LENGTH];
+  int result= 1;
+  int error;
+  bool clear_role= FALSE;
+  enum_binlog_format save_binlog_format;
+
+
+  DBUG_ENTER("acl_set_default_role");
+  DBUG_PRINT("enter",("host: '%s'  user: '%s'  rolename: '%s'",
+                      safe_str(user), safe_str(host), safe_str(rolename)));
+
+  if (rolename == current_role.str) {
+    if (!thd->security_ctx->priv_role[0])
+      rolename= "NONE";
+    else
+      rolename= thd->security_ctx->priv_role;
+  }
+
+  if (check_user_can_set_role(host, user, rolename, NULL))
+    DBUG_RETURN(result);
+
+  if (!strcasecmp(rolename, "NONE"))
+    clear_role= TRUE;
+
+  if ((result= open_grant_tables(thd, tables, TL_WRITE, Table_user)))
+    DBUG_RETURN(result != 1);
+
+  table= tables[USER_TABLE].table;
+  result= 1;
+
+  /*
+    This statement will be replicated as a statement, even when using
+    row-based replication.  The flag will be reset at the end of the
+    statement.
+    This has to be handled here as it's called by set_var.cc, which is
+    not automaticly handled by sql_parse.cc
+  */
+  save_binlog_format= thd->set_current_stmt_binlog_format_stmt();
+
+  mysql_mutex_lock(&acl_cache->lock);
+  ACL_USER *acl_user;
+  if (!(acl_user= find_user_exact(host, user)))
+  {
+    mysql_mutex_unlock(&acl_cache->lock);
+    my_message(ER_PASSWORD_NO_MATCH, ER(ER_PASSWORD_NO_MATCH), MYF(0));
+    goto end;
+  }
+
+  if (!clear_role) {
+    /* set new default_rolename */
+    acl_user->default_rolename.str= safe_strdup_root(&acl_memroot, rolename);
+    acl_user->default_rolename.length= strlen(rolename);
+  }
+  else
+  {
+    /* clear the default_rolename */
+    acl_user->default_rolename.str = NULL;
+    acl_user->default_rolename.length = 0;
+  }
+
+  /* update the mysql.user table with the new default role */
+  table->use_all_columns();
+  if (table->s->fields <= DEFAULT_ROLE_COLUMN_IDX)
+  {
+    my_error(ER_COL_COUNT_DOESNT_MATCH_PLEASE_UPDATE, MYF(0),
+             table->alias.c_ptr(), DEFAULT_ROLE_COLUMN_IDX + 1, table->s->fields,
+             static_cast<int>(table->s->mysql_version), MYSQL_VERSION_ID);
+    mysql_mutex_unlock(&acl_cache->lock);
+    goto end;
+  }
+  table->field[0]->store(host,(uint) strlen(host), system_charset_info);
+  table->field[1]->store(user,(uint) strlen(user), system_charset_info);
+  key_copy((uchar *) user_key, table->record[0], table->key_info,
+           table->key_info->key_length);
+
+  if (table->file->ha_index_read_idx_map(table->record[0], 0,
+                                         (uchar *) user_key, HA_WHOLE_KEY,
+                                         HA_READ_KEY_EXACT))
+  {
+    mysql_mutex_unlock(&acl_cache->lock);
+    my_message(ER_PASSWORD_NO_MATCH, ER(ER_PASSWORD_NO_MATCH), MYF(0));
+    goto end;
+  }
+  store_record(table, record[1]);
+  table->field[DEFAULT_ROLE_COLUMN_IDX]->store(acl_user->default_rolename.str,
+                                               acl_user->default_rolename.length,
+                                               system_charset_info);
+  if ((error=table->file->ha_update_row(table->record[1],table->record[0])) &&
+      error != HA_ERR_RECORD_IS_THE_SAME)
+  {
+    mysql_mutex_unlock(&acl_cache->lock);
+    table->file->print_error(error,MYF(0));	/* purecov: deadcode */
+    goto end;
+  }
+
+  acl_cache->clear(1);
+  mysql_mutex_unlock(&acl_cache->lock);
+  result= 0;
+  if (mysql_bin_log.is_open())
+  {
+    char buff[512];
+    int query_length=
+      sprintf(buff,"SET DEFAULT ROLE '%-.120s' FOR '%-.120s'@'%-.120s'",
+              safe_str(acl_user->default_rolename.str),
+              safe_str(acl_user->user.str),
+              safe_str(acl_user->host.hostname));
+    thd->clear_error();
+    result= thd->binlog_query(THD::STMT_QUERY_TYPE, buff, query_length,
+                              FALSE, FALSE, FALSE, 0);
+  }
+end:
+  close_mysql_tables(thd);
+  thd->restore_stmt_binlog_format(save_binlog_format);
+
+  DBUG_RETURN(result);
+}
+
 
 /*
   Find user in ACL
@@ -2809,7 +2980,7 @@ static ACL_ROLE *find_acl_role(const char *role)
   mysql_mutex_assert_owner(&acl_cache->lock);
 
   ACL_ROLE *r= (ACL_ROLE *)my_hash_search(&acl_roles, (uchar *)role,
-                                          role ? strlen(role) : 0);
+                                          safe_strlen(role));
   DBUG_RETURN(r);
 }
 
@@ -3887,8 +4058,7 @@ GRANT_TABLE::GRANT_TABLE(TABLE *form, TABLE *col_privs)
     uint key_prefix_len;
     KEY_PART_INFO *key_part= col_privs->key_info->key_part;
     col_privs->field[0]->store(host.hostname,
-                               host.hostname ? (uint) strlen(host.hostname) :
-                               0,
+                               (uint) safe_strlen(host.hostname),
                                system_charset_info);
     col_privs->field[1]->store(db,(uint) strlen(db), system_charset_info);
     col_privs->field[2]->store(user,(uint) strlen(user), system_charset_info);
@@ -11378,7 +11548,7 @@ static ulong parse_client_handshake_packet(MPVIO_EXT *mpvio,
     return packet_error;
 
   /* strlen() can't be easily deleted without changing protocol */
-  db_len= db ? strlen(db) : 0;
+  db_len= safe_strlen(db);
 
   char *next_field;
   char *client_plugin= next_field= passwd + passwd_len + (db ? db_len + 1 : 0);
@@ -12112,6 +12282,22 @@ bool acl_authenticate(THD *thd, uint com_change_user_pkt_len)
     may not have an active database to set.
   */
   sctx->db_access=0;
+
+#ifndef NO_EMBEDDED_ACCESS_CHECKS
+  /*
+    In case the user has a default role set, attempt to set that role
+  */
+  if (initialized && acl_user->default_rolename.length) {
+    ulonglong access= 0;
+    int result;
+    result= acl_check_setrole(thd, acl_user->default_rolename.str, &access);
+    if (!result)
+      result= acl_setrole(thd, acl_user->default_rolename.str, access);
+    if (result)
+      thd->clear_error(); // even if the default role was not granted, do not
+                          // close the connection
+  }
+#endif
 
   /* Change a database if necessary */
   if (mpvio.db.length)
