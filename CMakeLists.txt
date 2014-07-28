@@ -158,9 +158,7 @@ INCLUDE(ctest)
 INCLUDE(plugin)
 INCLUDE(install_macros)
 INCLUDE(mysql_add_executable)
-IF (WITH_WSREP)
-  INCLUDE(wsrep)
-ENDIF()
+INCLUDE(wsrep)
 
 # Handle options
 OPTION(DISABLE_SHARED 
