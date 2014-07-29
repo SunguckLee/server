@@ -13,6 +13,8 @@
 # along with this program; if not, write to the Free Software
 # Foundation, Inc., 51 Franklin St, Fifth Floor, Boston, MA  02110-1301 USA
 
+INCLUDE(wsrep)
+
  
 IF(WITH_WSREP AND NOT EMBEDDED_LIBRARY)
   BUILD_WITH_WSREP()
