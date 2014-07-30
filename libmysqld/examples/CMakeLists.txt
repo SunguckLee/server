@@ -32,12 +32,9 @@ IF(UNIX)
   TARGET_LINK_LIBRARIES(mysql_embedded ${MY_READLINE_LIBRARY})
 ENDIF(UNIX)
 
-IF(WITH_WSREP)
-ELSE()
 MYSQL_ADD_EXECUTABLE(mysqltest_embedded ../../client/mysqltest.cc
   COMPONENT Test)
 TARGET_LINK_LIBRARIES(mysqltest_embedded mysqlserver pcre pcreposix)
-ENDIF()
 
 IF(CMAKE_GENERATOR MATCHES "Xcode")
 # It does not seem possible to tell Xcode the resulting target might need
@@ -60,9 +57,6 @@ TARGET_LINK_LIBRARIES(mysql_client_test_embedded mysqlserver)
 
 IF(UNIX)
 SET_TARGET_PROPERTIES(mysql_embedded PROPERTIES ENABLE_EXPORTS TRUE)
-IF(WITH_WSREP)
-ELSE()
 SET_TARGET_PROPERTIES(mysqltest_embedded PROPERTIES ENABLE_EXPORTS TRUE)
-ENDIF()
 SET_TARGET_PROPERTIES(mysql_client_test_embedded PROPERTIES ENABLE_EXPORTS TRUE)
 ENDIF()

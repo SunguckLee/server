@@ -206,11 +206,7 @@ static void send_report(const char *when)
       SELECT * FROM IFROEMATION_SCHEMA.feedback is doing,
       read and concatenate table data into a String.
     */
-#ifdef WITH_WSREP
-    if (!(thd= new THD(false)))
-#else
     if (!(thd= new THD()))
-#endif
       return;
 
     if (prepare_for_fill(&tables))

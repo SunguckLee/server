@@ -2743,7 +2743,7 @@ public:
   } binlog_evt_union;
 
 #ifdef WITH_WSREP
-  const bool                wsrep_applier; /* dedicated slave applier thread */
+  bool                      wsrep_applier; /* dedicated slave applier thread */
   bool                      wsrep_applier_closing; /* applier marked to close */
   bool                      wsrep_client_thread; /* to identify client threads*/
   enum wsrep_exec_mode      wsrep_exec_mode;
@@ -2815,11 +2815,7 @@ public:
   /* Debug Sync facility. See debug_sync.cc. */
   struct st_debug_sync_control *debug_sync_control;
 #endif /* defined(ENABLED_DEBUG_SYNC) */
-#ifdef WITH_WSREP
-  THD(bool is_applier = false);
-#else
   THD();
-#endif
   ~THD();
 
   void init(void);
