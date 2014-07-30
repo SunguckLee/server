@@ -5311,11 +5311,10 @@ pthread_handler_t start_wsrep_THD(void *arg)
     return(NULL);
   }
 
-  if (!(thd= new THD()))
+  if (!(thd= new THD(true)))
   {
     return(NULL);
   }
-  thd->wsrep_applier= true;
   mysql_mutex_lock(&LOCK_thread_count);
   thd->thread_id=thread_id++;
 

@@ -1033,7 +1033,11 @@ bool Drop_table_error_handler::handle_condition(THD *thd,
 }
 
 
+#ifdef WITH_WSREP
+THD::THD(bool is_applier)
+#else
 THD::THD()
+#endif
    :Statement(&main_lex, &main_mem_root, STMT_CONVENTIONAL_EXECUTION,
               /* statement id */ 0),
    rli_fake(0), rgi_fake(0), rgi_slave(NULL),
@@ -1064,7 +1068,7 @@ THD::THD()
    derived_tables_processing(FALSE),
    spcont(NULL),
 #ifdef WITH_WSREP
-   wsrep_applier(false),
+   wsrep_applier(is_applier),
    wsrep_applier_closing(false),
    wsrep_client_thread(false),
    wsrep_po_handle(WSREP_PO_INITIALIZER),
