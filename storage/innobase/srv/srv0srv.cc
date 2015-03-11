@@ -399,6 +399,7 @@ UNIV_INTERN ib_uint64_t srv_index_page_decompressed     = 0;
 
 /* Defragmentation */
 UNIV_INTERN my_bool	srv_defragment = TRUE;
+UNIV_INTERN my_bool	srv_defragment_pause = FALSE;
 UNIV_INTERN uint	srv_defragment_n_pages = 7;
 UNIV_INTERN uint	srv_defragment_stats_accuracy = 0;
 UNIV_INTERN uint	srv_defragment_fill_factor_n_recs = 20;

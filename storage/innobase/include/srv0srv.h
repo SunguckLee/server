@@ -338,6 +338,7 @@ extern ulint	srv_n_write_io_threads;
 /* Defragmentation, Origianlly facebook default value is 100, but it's too high */
 #define SRV_DEFRAGMENT_FREQUENCY_DEFAULT 40
 extern my_bool	srv_defragment;
+extern uint srv_defragment_pause;
 extern uint	srv_defragment_n_pages;
 extern uint	srv_defragment_stats_accuracy;
 extern uint	srv_defragment_fill_factor_n_recs;
