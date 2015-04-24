@@ -17,6 +17,9 @@
 #ifndef SQL_ALTER_TABLE_H
 #define SQL_ALTER_TABLE_H
 
+// extern LEX_STRING EMPTY_STR;
+#include "sql_class.h"
+
 class Alter_drop;
 class Alter_column;
 class Key;
@@ -184,7 +187,6 @@ public:
   enum_alter_table_algorithm    requested_algorithm;
   // Type of ALTER TABLE lock.
   enum_alter_table_lock         requested_lock;
-
 
   Alter_info() :
     flags(0),

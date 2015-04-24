@@ -2035,6 +2035,10 @@ typedef struct st_ha_check_opt
   uint sql_flags;   /* sql layer flags - for something myisamchk cannot do */
   time_t start_time;   /* When check/repair starts */
   KEY_CACHE *key_cache; /* new key cache when changing key cache */
+
+  // Defragment index.
+  LEX_STRING defrag_index; /* defragment index */
+
   void init();
 } HA_CHECK_OPT;
 

@@ -11888,8 +11888,9 @@ ha_innobase::optimize(
 
 	if (srv_defragment) {
 		int err;
+		LEX_STRING index = thd->lex->check_opt.defrag_index;
+		err = defragment_table(prebuilt->table->name, (index.length<=0) ? NULL : index.str, true);
 
-		err = defragment_table(prebuilt->table->name, NULL, false);
 
 		if (err == 0) {
 			return (HA_ADMIN_OK);
@@ -11899,7 +11900,9 @@ ha_innobase::optimize(
 				"InnoDB: Cannot defragment table %s: returned error code %d\n",
 				prebuilt->table->name, err);
 
-			return (HA_ADMIN_TRY_ALTER);
+			// Return HA_ADMIN_INVALID rather than HA_ADMIN_TRY_ALTER,
+			// User might do not want to rebuild or analyze even if defragmentation failed.
+			return (HA_ADMIN_INVALID);
 		}
 	}
 

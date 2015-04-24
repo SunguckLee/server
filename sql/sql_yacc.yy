@@ -7303,7 +7303,7 @@ alter_commands:
             if (lex->m_sql_cmd == NULL)
               MYSQL_YYABORT;
           }
-          opt_no_write_to_binlog
+          index_defragmentation
         | ANALYZE_SYM PARTITION_SYM opt_no_write_to_binlog
           all_or_alt_part_name_list
           {
@@ -8121,6 +8121,22 @@ mi_check_type:
         | FOR_SYM UPGRADE_SYM { Lex->check_opt.sql_flags|= TT_FOR_UPGRADE; }
         ;
 
+index_defragmentation:
+          /* empty */ 
+          {
+            Lex->check_opt.defrag_index = EMPTY_STR;
+          }
+        | INDEX_SYM PRIMARY_SYM
+          {
+            LEX_STRING defrag_index = {C_STRING_WITH_LEN("PRIMARY")};
+            Lex->check_opt.defrag_index = defrag_index;
+          }
+        | INDEX_SYM ident
+          {
+            Lex->check_opt.defrag_index = $2;
+          }
+        ;
+        
 optimize:
           OPTIMIZE opt_no_write_to_binlog table_or_tables
           {
@@ -8140,6 +8156,7 @@ optimize:
             if (lex->m_sql_cmd == NULL)
               MYSQL_YYABORT;
           }
+          index_defragmentation
         ;
 
 opt_no_write_to_binlog:
