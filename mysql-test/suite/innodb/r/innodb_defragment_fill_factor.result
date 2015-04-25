@@ -2,7 +2,7 @@ DROP TABLE if exists t1;
 DROP TABLE if exists t2;
 Testing tables with large records
 CREATE TABLE t1 (a INT NOT NULL PRIMARY KEY AUTO_INCREMENT, b VARCHAR(256), KEY SECOND(a, b)) ENGINE=INNODB;
-alter table t1 defragment;
+optimize table t1;
 select count(*) from t1;
 count(*)
 790
@@ -22,7 +22,7 @@ insert into t1 values (84, REPEAT('A', 256));
 DROP TABLE t1;
 Testing table with small records
 CREATE TABLE t2 (a INT NOT NULL PRIMARY KEY AUTO_INCREMENT, b VARchar(16), KEY SECOND(a,b)) ENGINE=INNODB;
-alter table t2 defragment;
+optimize table t2;
 select count(*) from t2 force index(second);
 count(*)
 3701

@@ -1,41 +1,104 @@
 include/master-slave.inc
 [connection master]
 drop table if exists t1;
+drop table if exists t2;
+drop table if exists t3;
+drop table if exists t4;
 create table t1(a int not null primary key auto_increment, b varchar(256), key second(b)) engine=innodb;
 create table t2(a int not null primary key auto_increment, b varchar(256)) engine=myisam;
 insert into t1 values (1, REPEAT("a", 256));
 insert into t1 values (2, REPEAT("a", 256));
-alter table t1 defragment;
-alter table t1 defragment index primary;
-alter table t1 defragment index second;
-alter table t1 defragment index notexist;
-ERROR 42S12: Table './test/t1' has no index like the one used in CREATE INDEX; recreate the table
+optimize table t1;
+Table	Op	Msg_type	Msg_text
+test.t1	optimize	status	OK
+optimize table t1 index primary;
+Table	Op	Msg_type	Msg_text
+test.t1	optimize	status	OK
+optimize table t1 index second;
+Table	Op	Msg_type	Msg_text
+test.t1	optimize	status	OK
+optimize table t1 index notexist;
+Table	Op	Msg_type	Msg_text
+test.t1	optimize	Warning	InnoDB: Cannot defragment table test/t1: returned error code 1082
+
+test.t1	optimize	error	Invalid argument
 insert into t2 values (1, REPEAT("a", 256));
 insert into t2 values (2, REPEAT("a", 256));
-alter table t2 defragment;
-ERROR 42000: The storage engine for the table doesn't support 
-alter table t3 defragment;
-ERROR 42S02: Table 'test.t3' doesn't exist
+optimize table t2;
+Table	Op	Msg_type	Msg_text
+test.t2	optimize	status	OK
+optimize table t3;
+Table	Op	Msg_type	Msg_text
+test.t3	optimize	Error	Table 'test.t3' doesn't exist
+test.t3	optimize	status	Operation failed
+create table t4 (a int not null primary key auto_increment, b varchar(256), key second(b)) engine=innodb partition by range(a)(partition p0 values less than (10) engine=innodb, partition p1 values less than (20) engine=innodb);
+insert into t4 values (1, REPEAT("a", 256));
+insert into t4 values (11, REPEAT("a", 256));
+alter table t4 optimize partition p0;
+Table	Op	Msg_type	Msg_text
+test.t4	optimize	status	OK
+alter table t4 optimize partition p0, p1;
+Table	Op	Msg_type	Msg_text
+test.t4	optimize	status	OK
+alter table t4 optimize partition p3;
+Table	Op	Msg_type	Msg_text
+test.t4	optimize	error	Error in list of partitions to test.t4
+alter table t4 optimize partition p0, p1 index second;
+Table	Op	Msg_type	Msg_text
+test.t4	optimize	status	OK
 show binlog events in 'master-bin.000001' from 313;
 Log_name	Pos	Event_type	Server_id	End_log_pos	Info
 master-bin.000001	313	Gtid	1	351	GTID 0-1-1
 master-bin.000001	351	Query	1	465	use `test`; DROP TABLE IF EXISTS `t1` 
 master-bin.000001	465	Gtid	1	503	GTID 0-1-2
-master-bin.000001	503	Query	1	669	use `test`; create table t1(a int not null primary key auto_increment, b varchar(256), key second(b)) engine=innodb
-master-bin.000001	669	Gtid	1	707	GTID 0-1-3
-master-bin.000001	707	Query	1	858	use `test`; create table t2(a int not null primary key auto_increment, b varchar(256)) engine=myisam
-master-bin.000001	858	Gtid	1	896	BEGIN GTID 0-1-4
-master-bin.000001	896	Query	1	1002	use `test`; insert into t1 values (1, REPEAT("a", 256))
-master-bin.000001	1002	Xid	1	1029	COMMIT 
-master-bin.000001	1029	Gtid	1	1067	BEGIN GTID 0-1-5
-master-bin.000001	1067	Query	1	1173	use `test`; insert into t1 values (2, REPEAT("a", 256))
-master-bin.000001	1173	Xid	1	1200	COMMIT 
-master-bin.000001	1200	Gtid	1	1238	BEGIN GTID 0-1-6
-master-bin.000001	1238	Query	1	1344	use `test`; insert into t2 values (1, REPEAT("a", 256))
-master-bin.000001	1344	Query	1	1413	COMMIT
-master-bin.000001	1413	Gtid	1	1451	BEGIN GTID 0-1-7
-master-bin.000001	1451	Query	1	1557	use `test`; insert into t2 values (2, REPEAT("a", 256))
-master-bin.000001	1557	Query	1	1626	COMMIT
+master-bin.000001	503	Query	1	617	use `test`; DROP TABLE IF EXISTS `t2` 
+master-bin.000001	617	Gtid	1	655	GTID 0-1-3
+master-bin.000001	655	Query	1	769	use `test`; DROP TABLE IF EXISTS `t3` 
+master-bin.000001	769	Gtid	1	807	GTID 0-1-4
+master-bin.000001	807	Query	1	921	use `test`; DROP TABLE IF EXISTS `t4` 
+master-bin.000001	921	Gtid	1	959	GTID 0-1-5
+master-bin.000001	959	Query	1	1125	use `test`; create table t1(a int not null primary key auto_increment, b varchar(256), key second(b)) engine=innodb
+master-bin.000001	1125	Gtid	1	1163	GTID 0-1-6
+master-bin.000001	1163	Query	1	1314	use `test`; create table t2(a int not null primary key auto_increment, b varchar(256)) engine=myisam
+master-bin.000001	1314	Gtid	1	1352	BEGIN GTID 0-1-7
+master-bin.000001	1352	Query	1	1458	use `test`; insert into t1 values (1, REPEAT("a", 256))
+master-bin.000001	1458	Xid	1	1485	COMMIT 
+master-bin.000001	1485	Gtid	1	1523	BEGIN GTID 0-1-8
+master-bin.000001	1523	Query	1	1629	use `test`; insert into t1 values (2, REPEAT("a", 256))
+master-bin.000001	1629	Xid	1	1656	COMMIT 
+master-bin.000001	1656	Gtid	1	1694	GTID 0-1-9
+master-bin.000001	1694	Query	1	1774	use `test`; optimize table t1
+master-bin.000001	1774	Gtid	1	1812	GTID 0-1-10
+master-bin.000001	1812	Query	1	1906	use `test`; optimize table t1 index primary
+master-bin.000001	1906	Gtid	1	1944	GTID 0-1-11
+master-bin.000001	1944	Query	1	2037	use `test`; optimize table t1 index second
+master-bin.000001	2037	Gtid	1	2075	GTID 0-1-12
+master-bin.000001	2075	Query	1	2170	use `test`; optimize table t1 index notexist
+master-bin.000001	2170	Gtid	1	2208	BEGIN GTID 0-1-13
+master-bin.000001	2208	Query	1	2314	use `test`; insert into t2 values (1, REPEAT("a", 256))
+master-bin.000001	2314	Query	1	2383	COMMIT
+master-bin.000001	2383	Gtid	1	2421	BEGIN GTID 0-1-14
+master-bin.000001	2421	Query	1	2527	use `test`; insert into t2 values (2, REPEAT("a", 256))
+master-bin.000001	2527	Query	1	2596	COMMIT
+master-bin.000001	2596	Gtid	1	2634	GTID 0-1-15
+master-bin.000001	2634	Query	1	2714	use `test`; optimize table t2
+master-bin.000001	2714	Gtid	1	2752	GTID 0-1-16
+master-bin.000001	2752	Query	1	2832	use `test`; optimize table t3
+master-bin.000001	2832	Gtid	1	2870	GTID 0-1-17
+master-bin.000001	2870	Query	1	3159	use `test`; create table t4 (a int not null primary key auto_increment, b varchar(256), key second(b)) engine=innodb partition by range(a)(partition p0 values less than (10) engine=innodb, partition p1 values less than (20) engine=innodb)
+master-bin.000001	3159	Gtid	1	3197	BEGIN GTID 0-1-18
+master-bin.000001	3197	Query	1	3303	use `test`; insert into t4 values (1, REPEAT("a", 256))
+master-bin.000001	3303	Xid	1	3330	COMMIT 
+master-bin.000001	3330	Gtid	1	3368	BEGIN GTID 0-1-19
+master-bin.000001	3368	Query	1	3475	use `test`; insert into t4 values (11, REPEAT("a", 256))
+master-bin.000001	3475	Xid	1	3502	COMMIT 
+master-bin.000001	3502	Gtid	1	3540	GTID 0-1-20
+master-bin.000001	3540	Query	1	3639	use `test`; alter table t4 optimize partition p0
+master-bin.000001	3639	Gtid	1	3677	GTID 0-1-21
+master-bin.000001	3677	Query	1	3780	use `test`; alter table t4 optimize partition p0, p1
+master-bin.000001	3780	Gtid	1	3818	GTID 0-1-22
+master-bin.000001	3818	Query	1	3934	use `test`; alter table t4 optimize partition p0, p1 index second
 drop table t1;
 drop table t2;
+drop table t4;
 include/rpl_end.inc

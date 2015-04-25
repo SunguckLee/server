@@ -25,7 +25,7 @@ while ($size)
     dec $size;
 }
 --enable_query_log
-alter table t1 defragment;
+optimize table t1;
 --source include/restart_mysqld.inc
 select count(*) from t1;
 # After deletion & defragmentation, there are 800 records left. Each page can hold about 57 records. We fill the page 90% full,
@@ -88,7 +88,7 @@ while ($size)
     dec $size;
 }
 --enable_query_log
-alter table t2 defragment;
+optimize table t2;
 --source include/restart_mysqld.inc
 select count(*) from t2 force index(second);
 --let $second_before = query_get_value(select count(*) as Value from information_schema.innodb_buffer_page where table_name like '%t2%' and index_name = 'second', Value, 1)
