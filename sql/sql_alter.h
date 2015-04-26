@@ -17,9 +17,6 @@
 #ifndef SQL_ALTER_TABLE_H
 #define SQL_ALTER_TABLE_H
 
-// extern LEX_STRING EMPTY_STR;
-#include "sql_class.h"
-
 class Alter_drop;
 class Alter_column;
 class Key;

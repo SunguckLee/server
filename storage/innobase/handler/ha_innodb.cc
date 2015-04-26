@@ -33,6 +33,8 @@ this program; if not, write to the Free Software Foundation, Inc.,
 
 *****************************************************************************/
 
+#define MYSQL_SERVER
+
 #include <sql_table.h>	// explain_filename, nz2, EXPLAIN_PARTITIONS_AS_COMMENT,
 			// EXPLAIN_FILENAME_MAX_EXTRA_LENGTH
 
@@ -11889,7 +11891,8 @@ ha_innobase::optimize(
 	if (srv_defragment) {
 		int err;
 		LEX_STRING index = thd->lex->check_opt.defrag_index;
-		err = defragment_table(prebuilt->table->name, (index.length<=0) ? NULL : index.str, true);
+		// Do not use async mode defragmentation. which feature is disabled on webscalesql also.
+		err = defragment_table(prebuilt->table->name, (index.length<=0) ? NULL : index.str, false);
 
 
 		if (err == 0) {
