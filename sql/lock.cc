@@ -112,12 +112,14 @@ static int
 lock_tables_check(THD *thd, TABLE **tables, uint count, uint flags)
 {
   uint system_count, i;
-  bool is_superuser, log_table_write_query;
+  bool log_table_write_query;
+  bool enforce_ro = true;
 
   DBUG_ENTER("lock_tables_check");
 
   system_count= 0;
-  is_superuser= thd->security_ctx->master_access & SUPER_ACL;
+  if (!opt_super_readonly)
+    enforce_ro = !(thd->security_ctx->master_access & SUPER_ACL);
   log_table_write_query= (is_log_table_write_query(thd->lex->sql_command)
                          || ((flags & MYSQL_LOCK_LOG_TABLE) != 0));
 
@@ -188,7 +190,7 @@ lock_tables_check(THD *thd, TABLE **tables, uint count, uint flags)
     if (!(flags & MYSQL_LOCK_IGNORE_GLOBAL_READ_ONLY) && !t->s->tmp_table)
     {
       if (t->reginfo.lock_type >= TL_WRITE_ALLOW_WRITE &&
-          !is_superuser && opt_readonly && !thd->slave_thread)
+    	  enforce_ro && opt_readonly && !thd->slave_thread)
       {
         my_error(ER_OPTION_PREVENTS_STATEMENT, MYF(0), "--read-only");
         DBUG_RETURN(1);
