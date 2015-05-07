@@ -1240,6 +1240,48 @@ lock_rec_expl_exist_on_page(
 }
 
 /*********************************************************************//**
+Determines if there are explicit record locks on a page.
+@return	an explicit record lock on the page or couldn't get lock_sys mutex, or NULL if there are none */
+UNIV_INTERN
+bool
+lock_rec_expl_exist_on_page_nowait(
+/*========================*/
+	ulint	space,	/*!< in: space id */
+	ulint	page_no)/*!< in: page number */
+{
+	lock_t*	lock;
+
+	if(lock_mutex_enter_nowait()){
+		// Lock failed, just ignore this page
+		// Let's assume this page has locked row
+		return true;
+	}else{
+		lock = lock_rec_get_first_on_page_addr(space, page_no);
+		lock_mutex_exit();
+	}
+
+	return(lock!=NULL);
+}
+
+/*********************************************************************//**
+Checks if some transaction has an implicit x-lock on a record in a clustered
+index.
+@return	transaction id of the transaction which has the x-lock, or 0 */
+UNIV_INTERN
+trx_id_t
+lock_clust_rec_some_has_impl2(
+/*=========================*/
+	const rec_t*		rec,	/*!< in: user record */
+	const dict_index_t*	index,	/*!< in: clustered index */
+	const ulint*		offsets)/*!< in: rec_get_offsets(rec, index) */
+{
+	ut_ad(dict_index_is_clust(index));
+	ut_ad(page_rec_is_user_rec(rec));
+
+	return(row_get_rec_trx_id(rec, index, offsets));
+}
+
+/*********************************************************************//**
 Gets the first record lock on a page, where the page is identified by a
 pointer to it.
 @return	first lock, NULL if none exists */

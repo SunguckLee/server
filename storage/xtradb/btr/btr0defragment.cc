@@ -26,6 +26,7 @@ Modified 30/07/2014 Jan Lindström jan.lindstrom@skysql.com
 
 #include "btr0defragment.h"
 #ifndef UNIV_HOTBACKUP
+#include "trx0purge.h"
 #include "btr0cur.h"
 #include "btr0sea.h"
 #include "btr0pcur.h"
@@ -70,6 +71,15 @@ ulint btr_defragment_failures = 0;
 The difference between btr_defragment_count and btr_defragment_failures shows
 the amount of effort wasted. */
 ulint btr_defragment_count = 0;
+
+/* Total scanned rows for defragmentation & ttl-expire */
+ulint btr_ttl_expire_scan_rows;
+/* Total expired & deleted rows  */
+ulint btr_ttl_expired_rows;
+/* Total skipped pages because rows contained in page are locked */
+ulint btr_skip_ttl_expire_pages;
+/* Total row count which is stored in skipped-page, this is not only expired rows but all rows which is contained locked pages */
+ulint btr_skip_ttl_expire_rows;
 
 /******************************************************************//**
 Constructor for btr_defragment_item_t. */
@@ -517,6 +527,149 @@ btr_defragment_merge_pages(
 }
 
 /*************************************************************//**
+Delete ttl-expired row. But below case compaction will not remove that record.
+1. TTL-expire is run only table has ttl-expire column (based on column name "_ttl_expire_time_" and type is int unsigned)
+2. Row is locked
+3. Row's transaction no is greater than minimum transaction no which is not purged yet.
+4. TTL-timestamp is passed
+Status variables : Innodb_ttl_expire_scan_rows, Innodb_ttl_expired_rows, Innodb_skip_ttl_expire_pages, Innodb_skip_ttl_expire_rows
+@return  */
+UNIV_INTERN
+void
+btr_defragment_compact_page(
+		buf_block_t*	block,	/*!< in: starting block for defragmentation */
+		dict_index_t*	index,	/*!< in: index tree */
+		ulint ttl_ts_field_idx, /*!< in: ttl timestamp column idx */
+		mtr_t* mtr)             /*!< in/out: mtr */
+{
+	mem_heap_t*	heap;
+
+	page_t* page;
+	ulint offsets_[REC_OFFS_NORMAL_SIZE];
+	ulint* offsets = offsets_;
+	page_cur_t cursor;
+	rec_t* rec;
+
+	//bool lock_on_page_rows;
+	//bool lock_on_row;
+
+	// Choose safe lower bound of transaction id
+	trx_id_t safe_limit_trx_id;
+
+	ib_uint64_t now = (uint64_t)time(NULL);
+
+	/* 0. Remove TTL-expired row */
+	btr_assert_not_corrupted(block, index);
+	// ut_ad(mtr_memo_contains(mtr, ttl_block, MTR_MEMO_PAGE_X_FIX));
+	page = buf_block_get_frame(block);
+
+	page_cur_set_before_first(block, &cursor);
+	page_cur_move_to_next(&cursor);
+
+	rec = page_cur_get_rec(&cursor);
+
+	safe_limit_trx_id = (purge_sys->limit.trx_no==0) ? purge_sys->iter.trx_no : purge_sys->limit.trx_no;
+	//trx_id_t readview_low_trx_id = purge_sys->view->low_limit_no;
+	//trx_id_t safe_limit_trx_id = (purged_trx_id > readview_low_trx_id) ? readview_low_trx_id : purged_trx_id;
+
+	ulint space = page_get_space_id(page);
+	ulint page_no = page_get_page_no(page);
+	// Check explicit InnoDB row lock
+	if(lock_rec_expl_exist_on_page_nowait(space, page_no)){
+		// Do not check each row level lock status, Just check this page has row lock.
+		// If some other session has explicit lock on the row located this page, then just skip this page.
+		// Incrementing skip_compaction_locked_pages status variable.
+
+		//lock_on_page_rows = true;
+
+		os_atomic_increment_ulint(&btr_skip_ttl_expire_pages, 1);
+		os_atomic_increment_ulint(&btr_skip_ttl_expire_rows, page_get_n_recs(page));
+		return;
+	}
+
+	ib_uint64_t ttl_ts = 0;
+	byte* ttl_field_data;
+	ulint ttl_field_len;
+
+	trx_id_t    trx_id;
+	trx_id_t*	impl_trx_desc;
+
+	heap = mem_heap_create(256);
+	while (!page_cur_is_after_last(&cursor)) {
+		if(page_get_n_recs(page)<=1){
+			// I don't want tree structure to be changed, so just break the loop.
+			break;
+		}
+
+		os_atomic_increment_ulint(&btr_ttl_expire_scan_rows, 1);
+		offsets = rec_get_offsets(rec, index, offsets, ULINT_UNDEFINED, &heap);
+
+		// Check implicit InnoDB row lock
+		trx_id = lock_clust_rec_some_has_impl2(rec, index, offsets);
+		if (trx_id != 0) {
+			if(trx_id >= safe_limit_trx_id){// This record may still have undo entry or read view
+				// Skip processing ttl expire
+				page_cur_move_to_next(&cursor);
+				rec	= page_cur_get_rec(&cursor);
+				continue;
+			}
+
+			mutex_enter(&trx_sys->mutex);
+			impl_trx_desc = trx_find_descriptor(trx_sys->descriptors,
+							    trx_sys->descr_n_used,
+							    trx_id);
+			mutex_exit(&trx_sys->mutex);
+
+			if (impl_trx_desc != NULL){
+			    // && !lock_rec_has_expl(LOCK_X | LOCK_REC_NOT_GAP, block, heap_no, trx_id)) {
+				// Transaction which changed current row is still active status. ==> Skip processing ttl expire
+				page_cur_move_to_next(&cursor);
+				rec	= page_cur_get_rec(&cursor);
+				continue;
+			}
+		}
+
+		// ttl_ts_field_idx is user columns index, not included system columns
+		ttl_field_data = rec_get_nth_field(rec, offsets, ttl_ts_field_idx, &ttl_field_len);
+
+		ut_a(ttl_field_len <= sizeof ttl_ts);
+		ttl_ts = mach_read_int_type(ttl_field_data, ttl_field_len, true/* always unsigned */);
+
+		if(ttl_ts <= 0 || ttl_ts >= now){
+			// Not yet expired
+			page_cur_move_to_next(&cursor);
+			rec = page_cur_get_rec(&cursor);
+			continue;
+		}
+
+		/* Do not check each row level lock status, Just check this page has row lock.
+		 * If some other session has explicit lock on the row located this page, then just skip this page.
+		if(lock_on_page_rows){ // if some row lock is on the page, then check row lock for each record
+			if(lock_mutex_enter_nowait()){
+				// Lock failed, just ignore this page
+				continue;
+			}else{
+				lock_on_row = false;
+				lock_t* lock1 = lock_rec_get_first(block, rec_get_heap_no(rec));
+				lock_on_row = (lock1!=NULL);
+				lock_mutex_exit();
+				if(lock_on_row){
+					continue; // skip
+				}
+			}
+		}else{ // if no row lock on the page, then we can skip row lock
+		}
+		*/
+
+		page_cur_delete_rec(&cursor, index, offsets, mtr);
+		os_atomic_increment_ulint(&btr_ttl_expired_rows, 1);
+		rec = page_cur_get_rec(&cursor);
+	}
+
+	mem_heap_free(heap);
+}
+
+/*************************************************************//**
 Tries to merge N consecutive pages, starting from the page pointed by the
 cursor. Skip space 0. Only consider leaf pages.
 This function first loads all N pages into memory, then for each of
@@ -552,6 +705,7 @@ btr_defragment_n_pages(
 	uint		n_new_slots;
 	mem_heap_t*	heap;
 	ibool		end_of_index = FALSE;
+	ulint       ttl_ts_field_idx = ULINT_UNDEFINED;
 
 	/* It doesn't make sense to call this function with n_pages = 1. */
 	ut_ad(n_pages > 1);
@@ -576,11 +730,42 @@ btr_defragment_n_pages(
 		return NULL;
 	}
 
+	// Get ttl timestamp field idx
+	//  Must be matched column-name, type, unsigned and not null Exactly
+	//  [`_ttl_expire_time_` INT UNSIGNED NOT NULL]
+	// TODO Have to check this table has FT index also.
+	if(srv_delete_expired_row && dict_index_is_clust(index)){
+		// Always first index is Clustered index, so if no next index then there's only one clustered index
+		bool has_another_index = (dict_table_get_next_index(index)!=NULL);
+
+		if(!has_another_index && !dict_table_is_referenced_by_foreign_key(index->table)){
+
+			const dict_col_t*	col = index->table->cols;
+			for (ulint i = 0; i < index->table->n_cols; ++i, ++col) {
+				const char*	col_name;
+
+				col_name = dict_table_get_col_name(index->table, dict_col_get_no(col));
+				if (!strcmp(col_name, "_ttl_expire_time_")) {
+					if(col->mtype==DATA_INT && col->prtype & DATA_UNSIGNED && col->prtype & DATA_NOT_NULL){
+						ttl_ts_field_idx = dict_col_get_clust_pos(col, index);
+						// ttl_ts_field_idx = j;
+					}
+					break;
+				}
+			}
+		}
+	}
+
 	/* 1. Load the pages and calculate the total data size. */
 	blocks[0] = block;
 	for (uint i = 1; i <= n_pages; i++) {
 		btr_assert_not_corrupted(blocks[i-1], index);
 		ut_ad(mtr_memo_contains(mtr, blocks[i-1], MTR_MEMO_PAGE_X_FIX));
+
+		if(srv_delete_expired_row && ttl_ts_field_idx!=ULINT_UNDEFINED){
+			btr_defragment_compact_page(blocks[i-1], index, ttl_ts_field_idx, mtr);
+		}
+
 		page_t* page = buf_block_get_frame(blocks[i-1]);
 		ulint page_no = btr_page_get_next(page, mtr);
 		total_data_size += page_get_data_size(page);

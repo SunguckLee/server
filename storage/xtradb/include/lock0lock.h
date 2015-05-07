@@ -280,6 +280,27 @@ lock_rec_expl_exist_on_page(
 	ulint	page_no)/*!< in: page number */
 	__attribute__((warn_unused_result));
 /*********************************************************************//**
+Determines if there are explicit record locks on a page.
+@return	an explicit record lock on the page or couldn't get lock_sys mutex, or NULL if there are none */
+UNIV_INTERN
+bool
+lock_rec_expl_exist_on_page_nowait(
+/*========================*/
+	ulint	space,	/*!< in: space id */
+	ulint	page_no)/*!< in: page number */
+	__attribute__((warn_unused_result));
+/*********************************************************************//**
+Checks if some transaction has an implicit x-lock on a record in a clustered
+index.
+@return	transaction id of the transaction which has the x-lock, or 0 */
+trx_id_t
+lock_clust_rec_some_has_impl2(
+/*=========================*/
+	const rec_t*		rec,	/*!< in: user record */
+	const dict_index_t*	index,	/*!< in: clustered index */
+	const ulint*		offsets)/*!< in: rec_get_offsets(rec, index) */
+	__attribute__((nonnull, warn_unused_result));
+/*********************************************************************//**
 Checks if locks of other transactions prevent an immediate insert of
 a record. If they do, first tests if the query thread should anyway
 be suspended for some reason; if not, then puts the transaction and

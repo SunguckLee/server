@@ -52,6 +52,9 @@ Created 10/4/1994 Heikki Tuuri
 # define PAGE_CUR_DBG	6	/* As PAGE_CUR_LE, but skips search shortcut */
 #endif /* UNIV_SEARCH_DEBUG */
 
+/* Overwriting zero on deleted-record area. */
+extern my_bool page_zero_delete;
+
 #ifdef UNIV_DEBUG
 /*********************************************************//**
 Gets pointer to the page frame where the cursor is positioned.

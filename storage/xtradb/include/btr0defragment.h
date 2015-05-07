@@ -33,6 +33,11 @@ extern ulint btr_defragment_compression_failures;
 extern ulint btr_defragment_failures;
 extern ulint btr_defragment_count;
 
+extern ulint btr_ttl_expire_scan_rows;
+extern ulint btr_ttl_expired_rows;
+extern ulint btr_skip_ttl_expire_pages;
+extern ulint btr_skip_ttl_expire_rows;
+
 /** Item in the work queue for btr_degrament_thread. */
 struct btr_defragment_item_t
 {
