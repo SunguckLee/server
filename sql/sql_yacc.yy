@@ -1114,6 +1114,7 @@ bool my_yyoverflow(short **a, YYSTYPE **b, ulong *yystacksize);
 %token  DECLARE_SYM                   /* SQL-2003-R */
 %token  DEFAULT                       /* SQL-2003-R */
 %token  DEFINER_SYM
+%token  DEFRAGMENT_SYM                /* MYSQL */
 %token  DELAYED_SYM
 %token  DELAY_KEY_WRITE_SYM
 %token  DELETE_SYM                    /* SQL-2003-R */
@@ -7266,6 +7267,7 @@ alter_commands:
             if (Lex->m_sql_cmd == NULL)
               MYSQL_YYABORT;
           }
+        | defragment
         | alter_list
           opt_partitioning
         | alter_list
@@ -7479,6 +7481,40 @@ alt_part_name_item:
 /*
   End of management of partition commands
 */
+
+index_defragment:
+          /* empty */ {}
+        | INDEX_SYM PRIMARY_SYM
+          {
+            LEX_STRING defrag_index = {C_STRING_WITH_LEN("PRIMARY")};
+            Lex->alter_info.defrag_index = defrag_index;
+          }
+        | INDEX_SYM ident
+          {
+            Lex->alter_info.defrag_index = $2;
+          }
+        ;
+
+defragment:
+          DEFRAGMENT_SYM opt_use_partition index_defragment
+          {
+            // THD *thd= YYTHD;
+            Lex->m_sql_cmd= new (thd->mem_root)
+              Sql_cmd_defragment_table();
+
+            /* $2 would be null if alter statement does not have
+            PARTITION (x, y, ...) phrase */
+            if($2)
+            {
+              List_iterator<String> it(*$2);
+              String *tmp;
+              while ((tmp= it++))
+                  Lex->alter_info.defrag_parts.push_back(tmp);
+            }
+
+            if (Lex->m_sql_cmd == NULL)
+              MYSQL_YYABORT;
+          }
 
 alter_list:
           alter_list_item
@@ -14076,6 +14112,7 @@ keyword:
         | COMMIT_SYM            {}
         | CONTAINS_SYM          {}
         | DEALLOCATE_SYM        {}
+        | DEFRAGMENT_SYM        {}
         | DO_SYM                {}
         | END                   {}
         | EXAMINED_SYM          {}

@@ -168,8 +168,7 @@ Return a pointer to os_event for the query thread to wait on if this is a
 synchronized defragmentation. */
 os_event_t
 btr_defragment_add_index(
-	dict_index_t*	index,	/*!< index to be added  */
-	bool		async)	/*!< whether this is an async defragmentation */
+	dict_index_t*	index)	/*!< index to be added  */
 {
 	mtr_t mtr;
 	ulint space = dict_index_get_space(index);
@@ -185,10 +184,7 @@ btr_defragment_add_index(
 		return NULL;
 	}
 	btr_pcur_t* pcur = btr_pcur_create_for_mysql();
-	os_event_t event = NULL;
-	if (!async) {
-		event = os_event_create();
-	}
+	os_event_t event = os_event_create();
 	btr_pcur_open_at_index_side(true, index, BTR_SEARCH_LEAF, pcur,
 				    true, 0, &mtr);
 	btr_pcur_move_to_next(pcur, &mtr);
@@ -685,7 +681,8 @@ btr_defragment_n_pages(
 	buf_block_t*	block,	/*!< in: starting block for defragmentation */
 	dict_index_t*	index,	/*!< in: index tree */
 	uint		n_pages,/*!< in: number of pages to defragment */
-	mtr_t*		mtr)	/*!< in/out: mini-transaction */
+	mtr_t*		mtr,	/*!< in/out: mini-transaction */
+	ibool       is_first_run) /*!< in: is the first run on this index (if true then do compaction on first block, if not ignore first block) */
 {
 	ulint		space;
 	ulint		zip_size;
@@ -758,14 +755,15 @@ btr_defragment_n_pages(
 
 	/* 1. Load the pages and calculate the total data size. */
 	blocks[0] = block;
+	if(is_first_run &&
+			srv_delete_expired_row &&
+			ttl_ts_field_idx!=ULINT_UNDEFINED){
+		btr_defragment_compact_page(blocks[0], index, ttl_ts_field_idx, mtr);
+	}
+
 	for (uint i = 1; i <= n_pages; i++) {
 		btr_assert_not_corrupted(blocks[i-1], index);
 		ut_ad(mtr_memo_contains(mtr, blocks[i-1], MTR_MEMO_PAGE_X_FIX));
-
-		if(srv_delete_expired_row && ttl_ts_field_idx!=ULINT_UNDEFINED){
-			btr_defragment_compact_page(blocks[i-1], index, ttl_ts_field_idx, mtr);
-		}
-
 		page_t* page = buf_block_get_frame(blocks[i-1]);
 		ulint page_no = btr_page_get_next(page, mtr);
 		total_data_size += page_get_data_size(page);
@@ -777,6 +775,10 @@ btr_defragment_n_pages(
 		}
 		blocks[i] = btr_block_get(space, zip_size, page_no,
 					  RW_X_LATCH, index, mtr);
+
+		if(srv_delete_expired_row && ttl_ts_field_idx!=ULINT_UNDEFINED){
+			btr_defragment_compact_page(blocks[i], index, ttl_ts_field_idx, mtr);
+		}
 	}
 
 	if (n_pages == 1) {
@@ -935,7 +937,7 @@ DECLARE_THREAD(btr_defragment_thread)(
 		first_block = btr_cur_get_block(cursor);
 		last_block = btr_defragment_n_pages(first_block, index,
 						    srv_defragment_n_pages,
-						    &mtr);
+						    &mtr, (item->last_processed==0)/*is_first_run_on_this_index*/);
 		if (last_block) {
 			/* If we haven't reached the end of the index,
 			place the cursor on the last record of last page,

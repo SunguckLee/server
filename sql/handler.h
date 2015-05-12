@@ -2696,6 +2696,8 @@ public:
   int ha_rename_table(const char *from, const char *to);
   int ha_delete_table(const char *name);
   void ha_drop_table(const char *name);
+  int ha_defragment_table(const char *name, const char *index,
+          Alter_info* alter_info);
 
   int ha_create(const char *name, TABLE *form, HA_CREATE_INFO *info);
 
@@ -3913,6 +3915,9 @@ public:
   { return (my_errno=HA_ERR_WRONG_COMMAND); }
   virtual void prepare_for_alter() { return; }
   virtual void drop_table(const char *name);
+  virtual int defragment_table(const char *name, const char *index,
+                                 Alter_info* alter_info)
+    { return HA_ADMIN_NOT_IMPLEMENTED; }
   virtual int create(const char *name, TABLE *form, HA_CREATE_INFO *info)=0;
 
   virtual int create_partitioning_metadata(const char *name, const char *old_name,

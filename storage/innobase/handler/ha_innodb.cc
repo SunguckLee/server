@@ -10696,7 +10696,7 @@ ha_innobase::defragment_table(
 /*======================*/
 	const char*	name,		/*!< in: table name */
 	const char*	index_name,	/*!< in: index name */
-	bool		async)		/*!< in: whether to wait until finish */
+	Alter_info* alter_info)		/*!< in: not used */
 {
   char    norm_name[FN_REFLEN];
   dict_table_t* table;
@@ -10727,8 +10727,8 @@ ha_innobase::defragment_table(
 			ret = ER_SP_ALREADY_EXISTS;
 			break;
 		}
-		os_event_t event = btr_defragment_add_index(index, async);
-		if (!async && event) {
+		os_event_t event = btr_defragment_add_index(index);
+		if (event) {
 			while(os_event_wait_time(event, 1000000)) {
 				if (thd_killed(current_thd)) {
 					btr_defragment_remove_index(index);
@@ -11891,8 +11891,7 @@ ha_innobase::optimize(
 	if (srv_defragment) {
 		int err;
 		LEX_STRING index = thd->lex->check_opt.defrag_index;
-		// Do not use async mode defragmentation. which feature is disabled on webscalesql also.
-		err = defragment_table(prebuilt->table->name, (index.length<=0) ? NULL : index.str, false);
+		err = defragment_table(prebuilt->table->name, (index.length<=0) ? NULL : index.str, NULL);
 
 
 		if (err == 0) {

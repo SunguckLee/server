@@ -11245,21 +11245,21 @@ ha_innobase::defragment_table(
 /*======================*/
 	const char*	name,		/*!< in: table name */
 	const char*	index_name,	/*!< in: index name */
-	bool		async)		/*!< in: whether to wait until finish */
+	Alter_info* alter_info)		/*!< in: not used */
 {
-  char    norm_name[FN_REFLEN];
-  dict_table_t* table;
-  dict_index_t* index;
-  ibool		one_index = (index_name != 0);
-  int		ret = 0;
-  if (!srv_defragment) {
-  	return ER_FEATURE_DISABLED;
-  }
-  normalize_table_name(norm_name, name);
-  table = dict_table_open_on_name(norm_name, FALSE,
-          FALSE, DICT_ERR_IGNORE_NONE);
-  for (index = dict_table_get_first_index(table); index;
-       index = dict_table_get_next_index(index)) {
+	char		norm_name[FN_REFLEN];
+	dict_table_t*	table;
+	dict_index_t*	index;
+	ibool		one_index = (*index_name != 0);
+	int		ret = 0;
+	if (!srv_defragment) {
+		return ER_FEATURE_DISABLED;
+	}
+	normalize_table_name(norm_name, name);
+	table = dict_table_open_on_name(norm_name, FALSE,
+					FALSE, DICT_ERR_IGNORE_NONE);
+	for (index = dict_table_get_first_index(table); index;
+	     index = dict_table_get_next_index(index)) {
 		if (one_index && strcasecmp(index_name, index->name) != 0)
 			continue;
 		if (btr_defragment_find_index(index)) {
@@ -11276,8 +11276,8 @@ ha_innobase::defragment_table(
 			ret = ER_SP_ALREADY_EXISTS;
 			break;
 		}
-		os_event_t event = btr_defragment_add_index(index, async);
-		if (!async && event) {
+		os_event_t event = btr_defragment_add_index(index);
+		if (event) {
 			while(os_event_wait_time(event, 1000000)) {
 				if (thd_killed(current_thd)) {
 					btr_defragment_remove_index(index);
@@ -11293,11 +11293,11 @@ ha_innobase::defragment_table(
 			one_index = FALSE;
 			break;
 		}
-  }
-  dict_table_close(table, FALSE, FALSE);
-  if (ret == 0 && one_index)
-  	ret = ER_NO_SUCH_INDEX;
-  return ret;
+	}
+	dict_table_close(table, FALSE, FALSE);
+	if (ret == 0 && one_index)
+		ret = ER_NO_SUCH_INDEX;
+	return ret;
 }
 
 /*****************************************************************//**
@@ -12470,8 +12470,7 @@ ha_innobase::optimize(
 	if (srv_defragment) {
 		int err;
 		LEX_STRING index = thd->lex->check_opt.defrag_index;
-		// Do not use async mode defragmentation. which feature is disabled on webscalesql also.
-		err = defragment_table(prebuilt->table->name, (index.length<=0) ? NULL : index.str, false);
+		err = defragment_table(prebuilt->table->name, (index.length<=0) ? NULL : index.str, NULL);
 
 		if (err == 0) {
 			return (HA_ADMIN_OK);
