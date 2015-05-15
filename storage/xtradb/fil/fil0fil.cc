@@ -139,6 +139,9 @@ UNIV_INTERN ulint	fil_n_file_opened			= 0;
 /** The null file address */
 UNIV_INTERN fil_addr_t	fil_addr_null = {FIL_NULL, 0};
 
+/** Trash directory for removed innodb data file */
+UNIV_INTERN char* fil_data_trash_dir;
+
 #ifdef UNIV_PFS_MUTEX
 /* Key to register fil_system_mutex with performance schema */
 UNIV_INTERN mysql_pfs_key_t	fil_system_mutex_key;
@@ -2862,15 +2865,35 @@ fil_delete_tablespace(
 
 	mutex_exit(&fil_system->mutex);
 
+	ibool moved_trash_dir = false;
+
 	if (err != DB_SUCCESS) {
 		rw_lock_x_unlock(&space->latch);
-	} else if (!os_file_delete(innodb_file_data_key, path)
-		   && !os_file_delete_if_exists(innodb_file_data_key, path)) {
+	}else{
+		if(fil_data_trash_dir){
+			// TODO Move innodb data file to TRASH directory for TRIM command
+			char target_file[FN_REFLEN];
+			ulonglong nano_ts = my_interval_timer();
+			size_t dir_name_length = dirname_length(path);
+			snprintf(target_file, FN_REFLEN-1, "%s/%llu-%s", fil_data_trash_dir, nano_ts, (char*)(path + (uint)dir_name_length));
 
-		/* Note: This is because we have removed the
-		tablespace instance from the cache. */
+			moved_trash_dir = os_file_rename(innodb_file_data_key, path, target_file);
+			if(!moved_trash_dir){
+				ut_print_timestamp(stderr);
+				fprintf(stderr, "Moving deleted ibd data file to trash directory is failed (%s --> %s)\n", path, target_file);
+			}
+		}
 
-		err = DB_IO_ERROR;
+		if(!moved_trash_dir || !fil_data_trash_dir){ // If move trash failed or set not to move trash then just remove it
+			if (!os_file_delete(innodb_file_data_key, path)
+					   && !os_file_delete_if_exists(innodb_file_data_key, path)) {
+
+					/* Note: This is because we have removed the
+					tablespace instance from the cache. */
+
+					err = DB_IO_ERROR;
+			}
+		}
 	}
 
 	if (err == DB_SUCCESS) {
@@ -6643,7 +6666,24 @@ fil_delete_file(
 
 	ib_logf(IB_LOG_LEVEL_INFO, "Deleting %s", ibd_name);
 
-	os_file_delete_if_exists(innodb_file_data_key, ibd_name);
+	ibool moved_trash_dir = false;
+	if(fil_data_trash_dir){
+		// TODO Move innodb data file to TRASH directory for TRIM command
+		char target_file[FN_REFLEN];
+		ulonglong nano_ts = my_interval_timer();
+		size_t dir_name_length = dirname_length(ibd_name);
+		snprintf(target_file, FN_REFLEN-1, "%s/%llu-%s", fil_data_trash_dir, nano_ts, (char*)(ibd_name+ (uint)dir_name_length));
+
+		moved_trash_dir = os_file_rename(innodb_file_data_key, ibd_name, target_file);
+		if(!moved_trash_dir){
+			ut_print_timestamp(stderr);
+			fprintf(stderr, "Moving deleted ibd data file to trash directory is failed (%s --> %s)\n", ibd_name, target_file);
+		}
+	}
+
+	if(!moved_trash_dir || !fil_data_trash_dir){ // If move trash failed or set not to move trash then just remove it
+		os_file_delete_if_exists(innodb_file_data_key, ibd_name);
+	}
 
 	char*	cfg_name = fil_make_cfg_name(ibd_name);
 

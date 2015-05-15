@@ -205,6 +205,9 @@ extern ulint	fil_n_pending_tablespace_flushes;
 /** Number of files currently open */
 extern ulint	fil_n_file_opened;
 
+/** Trash directory for removed innodb data file */
+extern char* fil_data_trash_dir;
+
 struct fsp_open_info {
 	ibool		success;	/*!< Has the tablespace been opened? */
 	const char*	check_msg;	/*!< fil_check_first_page() message */

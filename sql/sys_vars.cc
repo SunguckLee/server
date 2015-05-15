@@ -3770,6 +3770,38 @@ static Sys_var_charptr Sys_license(
        READ_ONLY GLOBAL_VAR(license), NO_CMD_LINE, IN_SYSTEM_CHARSET,
        DEFAULT(STRINGIFY_ARG(LICENSE)));
 
+static bool check_binlog_trash_dir(sys_var *self, THD *thd, set_var *var)
+{
+  if (!var->value)
+    return false; // Not use trash directory when log_bin_trash_dir parameter is null or emtpy
+
+  if (!var->save_result.string_value.str || var->save_result.string_value.length<=0)
+    return false; // Not use trash directory when log_bin_trash_dir parameter is null or emtpy
+
+  if (var->save_result.string_value.length > FN_REFLEN)
+  { // path is too long
+    my_error(ER_PATH_LENGTH, MYF(0), self->name.str);
+    return true;
+  }
+
+  if (var->save_result.string_value.str[0]!='/')
+  {
+	// Trash directory must be absolute directory (and do not care for Windows yet)
+	return true;
+  }
+
+  MY_STAT f_stat;
+
+  if (my_stat(var->save_result.string_value.str, &f_stat, MYF(0)))
+  {
+    if (MY_S_ISDIR(f_stat.st_mode) && (f_stat.st_mode & MY_S_IWRITE)){
+      return false; // If it's writable direcotry
+    }
+  }
+
+  return true;
+}
+
 static bool check_log_path(sys_var *self, THD *thd, set_var *var)
 {
   if (!var->value)
@@ -3866,6 +3898,19 @@ static bool fix_slow_log_file(sys_var *self, THD *thd, enum_var_type type)
   return fix_log(&opt_slow_logname, opt_log_basename, "-slow.log",
                  opt_slow_log, reopen_slow_log);
 }
+static bool fix_binlog_trash_dir(sys_var *self, THD *thd, enum_var_type type)
+{
+  if(opt_binlog_trash_dir==NULL){
+	  return false;
+  }
+
+  if(strlength(opt_binlog_trash_dir)<=0){
+    my_free(opt_binlog_trash_dir);
+    opt_binlog_trash_dir = NULL;
+  }
+
+  return false; // Do nothing
+}
 static Sys_var_charptr Sys_slow_log_path(
        "slow_query_log_file", "Log slow queries to given log file. "
        "Defaults logging to 'hostname'-slow.log. Must be enabled to activate "
@@ -3873,6 +3918,12 @@ static Sys_var_charptr Sys_slow_log_path(
        PREALLOCATED GLOBAL_VAR(opt_slow_logname), CMD_LINE(REQUIRED_ARG),
        IN_FS_CHARSET, DEFAULT(0), NO_MUTEX_GUARD, NOT_IN_BINLOG,
        ON_CHECK(check_log_path), ON_UPDATE(fix_slow_log_file));
+
+static Sys_var_charptr Sys_log_bin_trash_dir(
+       "log_bin_trash_dir", "Move deleted binary log file to given directory. ",
+       PREALLOCATED GLOBAL_VAR(opt_binlog_trash_dir), CMD_LINE(REQUIRED_ARG),
+       IN_FS_CHARSET, DEFAULT(0), NO_MUTEX_GUARD, NOT_IN_BINLOG,
+       ON_CHECK(check_binlog_trash_dir), ON_UPDATE(fix_binlog_trash_dir));
 
 static Sys_var_have Sys_have_compress(
        "have_compress", "have_compress",

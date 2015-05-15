@@ -166,6 +166,7 @@ static uint innobase_change_buffer_max_size = CHANGE_BUFFER_DEFAULT_SIZE;
 /* The default values for the following char* start-up parameters
 are determined in innobase_init below: */
 
+static char*    innobase_data_trash_dir         = NULL;
 static char*	innobase_data_home_dir			= NULL;
 static char*	innobase_data_file_path			= NULL;
 static char*	innobase_file_format_name		= NULL;
@@ -3572,6 +3573,27 @@ mem_free_and_error:
 	}
 
 	srv_file_format = format_id;
+
+	/* Validate data trash directory */
+	fil_data_trash_dir = NULL;
+	if (innobase_data_trash_dir != NULL && strlen(innobase_data_trash_dir)>0 && innobase_data_trash_dir[0]=='/')
+	{
+		if(innobase_data_trash_dir[0]!='/'){
+			sql_print_error("InnoDB: innodb_data_trash_dir must be absolute directory path.");
+		}else{
+			MY_STAT f_stat;
+			if (my_stat(innobase_data_trash_dir, &f_stat, MYF(0)))
+			{
+				if (MY_S_ISDIR(f_stat.st_mode) && (f_stat.st_mode & MY_S_IWRITE)){
+					fil_data_trash_dir = my_strdup(innobase_data_trash_dir, MYF(MY_FAE));
+				}else{
+					sql_print_error("InnoDB: innodb_data_trash_dir must be writable directory.");
+				}
+			}else{
+				sql_print_error("InnoDB: can not get directory(innodb_data_trash_dir) status.");
+			}
+		}
+	}
 
 	/* Given the type of innobase_file_format_name we have little
 	choice but to cast away the constness from the returned name.
@@ -15354,6 +15376,104 @@ innobase_file_format_validate_and_set(
 }
 
 /*************************************************************//**
+Check if it is a valid directory format (abs path). This function is registered as
+a callback with MySQL.
+@return	0 for valid trash directory */
+static
+int
+innodb_trash_dir_validate(
+/*=============================*/
+	THD*				thd,	/*!< in: thread handle */
+	struct st_mysql_sys_var*	var,	/*!< in: pointer to system
+						variable */
+	void*				save,	/*!< out: immediate result
+						for update function */
+	struct st_mysql_value*		value)	/*!< in: incoming string */
+{
+	const char*	trash_dir_input;
+	char		buff[FN_REFLEN];
+	int		len = sizeof(buff);
+
+	ut_a(save != NULL);
+	ut_a(value != NULL);
+
+	trash_dir_input = value->val_str(value, buff, &len);
+	if(len >= FN_REFLEN)
+	{
+		// Shortage for buffer length
+		*static_cast<const char**>(save) = NULL;
+		sql_print_error("InnoDB: innodb_data_trash_dir is too long.");
+		return 1;
+	}
+
+	if(trash_dir_input==NULL || len<=0)
+	{
+		*static_cast<const char**>(save) = trash_dir_input;
+		return 0;
+	}
+
+	if (trash_dir_input[0]!='/')
+	{
+		// Trash directory must be absolute directory (and do not care for Windows yet)
+		*static_cast<const char**>(save) = NULL;
+		sql_print_error("InnoDB: innodb_data_trash_dir must be absolute path.");
+		return 1;
+	}
+
+	MY_STAT f_stat;
+	if (my_stat(trash_dir_input, &f_stat, MYF(0)))
+	{
+		if (MY_S_ISDIR(f_stat.st_mode) && (f_stat.st_mode & MY_S_IWRITE)){
+			*static_cast<const char**>(save) = trash_dir_input;
+			sql_print_error("InnoDB: innodb_data_trash_dir must be writable directory.");
+			return 0; // If it's writable direcotry
+		}
+	}else{
+		sql_print_error("InnoDB: can not get directory(innodb_data_trash_dir) status.");
+	}
+
+	*static_cast<const char**>(save) = NULL;
+	return 1;
+}
+
+/****************************************************************//**
+Update the system variable innodb_data_trash_dir using the "saved"
+value. This function is registered as a callback with MySQL. */
+static
+void
+innodb_trash_dir_update(
+/*===========================*/
+	THD*				thd,		/*!< in: thread handle */
+	struct st_mysql_sys_var*	var,		/*!< in: pointer to
+							system variable */
+	void*				var_ptr,	/*!< out: where the
+							formal string goes */
+	const void*			save)		/*!< in: immediate result
+							from check function */
+{
+	const char* data_trash_dir;
+
+	ut_a(var_ptr != NULL);
+	ut_a(save != NULL);
+
+	data_trash_dir = *static_cast<const char*const*>(save);
+
+	if(fil_data_trash_dir)
+	{
+		char* b = fil_data_trash_dir;
+		fil_data_trash_dir = NULL;
+		my_free(b);
+	}
+
+	if (data_trash_dir && strlen(data_trash_dir)>0)
+	{
+		fil_data_trash_dir = my_strdup(data_trash_dir, MYF(MY_FAE));
+	}
+
+	*static_cast<const char**>(var_ptr) = fil_data_trash_dir;
+}
+
+/*************************************************************//**
 Check if it is a valid file format. This function is registered as
 a callback with MySQL.
 @return	0 for valid file format */
@@ -17357,6 +17477,12 @@ static MYSQL_SYSVAR_STR(data_home_dir, innobase_data_home_dir,
   "The common part for InnoDB table spaces.",
   NULL, NULL, NULL);
 
+static MYSQL_SYSVAR_STR(data_trash_dir, innobase_data_trash_dir,
+  PLUGIN_VAR_RQCMDARG,
+  "Trash directory for InnoDB data file",
+  innodb_trash_dir_validate,
+  innodb_trash_dir_update, NULL);
+
 static MYSQL_SYSVAR_BOOL(doublewrite, innobase_use_doublewrite,
   PLUGIN_VAR_NOCMDARG | PLUGIN_VAR_READONLY,
   "Enable InnoDB doublewrite buffer (enabled by default). "
@@ -18512,6 +18638,7 @@ static struct st_mysql_sys_var* innobase_system_variables[]= {
   MYSQL_SYSVAR(kill_idle_transaction),
   MYSQL_SYSVAR(data_file_path),
   MYSQL_SYSVAR(data_home_dir),
+  MYSQL_SYSVAR(data_trash_dir),
   MYSQL_SYSVAR(doublewrite),
   MYSQL_SYSVAR(api_enable_binlog),
   MYSQL_SYSVAR(api_enable_mdl),

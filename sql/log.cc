@@ -63,6 +63,7 @@
 
 #define FLAGSTR(V,F) ((V)&(F)?#F" ":"")
 
+char *opt_binlog_trash_dir;
 LOGGER logger;
 
 MYSQL_BIN_LOG mysql_bin_log(&sync_binlog_period);
@@ -3835,6 +3836,9 @@ bool MYSQL_BIN_LOG::reset_logs(THD* thd, bool create_new_log,
   bool error=0;
   int err;
   const char* save_name;
+
+  // TODO Move binary log file to TRASH directory for TRIM command
+  int moved_trash_dir = false;
   DBUG_ENTER("reset_logs");
 
   if (!is_relay_log)
@@ -3949,7 +3953,25 @@ bool MYSQL_BIN_LOG::reset_logs(THD* thd, bool create_new_log,
 
   for (;;)
   {
-    if ((error= my_delete(linfo.log_file_name, MYF(0))) != 0)
+	if(opt_binlog_trash_dir){ // If trash directory is defined
+		// TODO Move innodb data file to TRASH directory for TRIM command
+		char target_file[FN_REFLEN];
+		ulonglong nano_ts = my_interval_timer();
+		size_t dir_name_length = dirname_length(linfo.log_file_name);
+		snprintf(target_file, FN_REFLEN-1, "%s/%llu-%s", opt_binlog_trash_dir, nano_ts, (char*)(linfo.log_file_name + (uint)dir_name_length));
+
+		moved_trash_dir = !my_rename(linfo.log_file_name, target_file, MYF(0));
+		if(!moved_trash_dir){
+			fprintf(stderr, "Moving deleted-file to trash directory is failed (%s --> %s).\n", linfo.log_file_name, target_file);
+		}
+	}
+
+	error = 0;
+	if(!moved_trash_dir || !opt_binlog_trash_dir){ // If move trash failed or set not to move trash then just remove it
+		error= my_delete(linfo.log_file_name, MYF(0));
+	}
+
+    if (error != 0)
     {
       if (my_errno == ENOENT) 
       {
@@ -4401,6 +4423,9 @@ int MYSQL_BIN_LOG::purge_index_entry(THD *thd, ulonglong *decrease_log_space,
   LOG_INFO log_info;
   LOG_INFO check_log_info;
 
+  // TODO Move binary log file to TRASH directory for TRIM command
+  int moved_trash_dir = false;
+
   DBUG_ASSERT(my_b_inited(&purge_index_file));
 
   if ((error=reinit_io_cache(&purge_index_file, READ_CACHE, 0, 0, 0)))
@@ -4499,7 +4524,7 @@ int MYSQL_BIN_LOG::purge_index_entry(THD *thd, ulonglong *decrease_log_space,
           }
           goto err;
         }
-           
+
         error= 0;
         if (!need_mutex)
         {
@@ -4510,7 +4535,25 @@ int MYSQL_BIN_LOG::purge_index_entry(THD *thd, ulonglong *decrease_log_space,
         }
 
         DBUG_PRINT("info",("purging %s",log_info.log_file_name));
-        if (!my_delete(log_info.log_file_name, MYF(0)))
+
+    	if(opt_binlog_trash_dir){
+    		char target_file[FN_REFLEN];
+    		ulonglong nano_ts = my_interval_timer();
+    		size_t dir_name_length = dirname_length(log_info.log_file_name);
+    		snprintf(target_file, FN_REFLEN-1, "%s/%llu-%s", opt_binlog_trash_dir, nano_ts, (char*)(log_info.log_file_name + (uint)dir_name_length));
+
+    		moved_trash_dir = !my_rename(log_info.log_file_name, target_file, MYF(0));
+    		if(!moved_trash_dir){
+    			fprintf(stderr, "Moving deleted binary log file to trash directory is failed (%s --> %s).\n", log_info.log_file_name, target_file);
+    		}
+    	}
+
+    	error = 0;
+    	if(!moved_trash_dir || !opt_binlog_trash_dir){ // If move trash failed or set not to move trash then just remove it
+    		error= my_delete(log_info.log_file_name, MYF(0));
+    	}
+
+        if (!error)
         {
           if (decrease_log_space)
             *decrease_log_space-= s.st_size;
